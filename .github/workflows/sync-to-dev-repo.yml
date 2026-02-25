@@ -1,0 +1,42 @@
+name: Sync Issues to Dev Repo
+
+# When an issue in this customer-facing repo changes state,
+# dispatch an event to q2000drum/SharedLens to update the mirror issue.
+
+on:
+  issues:
+    types: [opened, closed, reopened, labeled, unlabeled]
+
+jobs:
+  sync-to-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find mirror issue number
+        id: find_mirror
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          SOURCE_NUM: ${{ github.event.issue.number }}
+        run: |
+          # Search for mirror issues in the dev repo that reference this issue
+          RESULTS=$(gh api "search/issues?q=repo:q2000drum/SharedLens+in:body+Noetic-Data/SharedLens-issues%23${SOURCE_NUM}" 2>/dev/null)
+          MIRROR_NUM=$(echo "$RESULTS" | jq -r '.items[0].number // empty')
+          if [ -n "$MIRROR_NUM" ]; then
+            echo "mirror_number=$MIRROR_NUM" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Found mirror: q2000drum/SharedLens#${MIRROR_NUM}"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No mirror issue found for #${SOURCE_NUM}"
+          fi
+
+      - name: Dispatch sync event to dev repo
+        if: steps.find_mirror.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          gh api repos/q2000drum/SharedLens/dispatches \
+            -f event_type=sync-issue-state \
+            -f "client_payload[source_number]=${{ github.event.issue.number }}" \
+            -f "client_payload[mirror_number]=${{ steps.find_mirror.outputs.mirror_number }}" \
+            -f "client_payload[action]=${{ github.event.action }}" \
+            -f "client_payload[source_state]=${{ github.event.issue.state }}"
